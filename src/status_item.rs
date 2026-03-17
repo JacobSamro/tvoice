@@ -3,7 +3,9 @@
 use crate::ui::UiCommand;
 use anyhow::{Context, Result, bail};
 use cocoa::appkit::{
-    NSButton, NSColor, NSImage, NSRectFill, NSSquareStatusItemLength, NSStatusBar, NSStatusItem,
+    NSButton, NSColor, NSImage, NSImageNameInfo, NSImageNameRevealFreestandingTemplate,
+    NSImageNameStopProgressFreestandingTemplate, NSMenu, NSMenuItem, NSRectFill,
+    NSSquareStatusItemLength, NSStatusBar, NSStatusItem,
 };
 use cocoa::base::{NO, YES, id, nil};
 use cocoa::foundation::{NSPoint, NSRect, NSSize, NSString};
@@ -15,12 +17,19 @@ use std::ffi::c_void;
 use std::sync::OnceLock;
 use std::sync::mpsc::Sender;
 
-const CALLBACK_IVAR: &str = "callback";
+const CALLBACKS_IVAR: &str = "callbacks";
 
-type ClickHandler = Box<dyn FnMut()>;
+type MenuHandler = Box<dyn FnMut()>;
+
+struct MenuCallbacks {
+    open_app: MenuHandler,
+    about: MenuHandler,
+    quit: MenuHandler,
+}
 
 pub struct StatusItemController {
     item: StrongPtr,
+    _menu: StrongPtr,
     _target: StrongPtr,
 }
 
@@ -46,27 +55,40 @@ impl StatusItemController {
                 button.setTitle_(NSString::alloc(nil).init_str("TV"));
             }
             let _: () = msg_send![button, setFrameSize: NSSize::new(button_width, 22.0)];
-            let _: () = msg_send![button, setToolTip: NSString::alloc(nil).init_str("Open tvoice settings")];
+            let _: () = msg_send![button, setToolTip: NSString::alloc(nil).init_str("tvoice")];
 
             let target: id = msg_send![status_item_target_class(), new];
             if target == nil {
                 bail!("failed to create status item target");
             }
 
-            let handler: ClickHandler = Box::new(move || {
-                let _ = ui_tx.send(UiCommand::ShowSettings);
-            });
+            let callbacks = MenuCallbacks {
+                open_app: Box::new({
+                    let ui_tx = ui_tx.clone();
+                    move || {
+                        let _ = ui_tx.send(UiCommand::ShowSettings);
+                    }
+                }),
+                about: Box::new({
+                    let ui_tx = ui_tx.clone();
+                    move || {
+                        let _ = ui_tx.send(UiCommand::ShowAbout);
+                    }
+                }),
+                quit: Box::new(quit_application),
+            };
 
             (*target).set_ivar(
-                CALLBACK_IVAR,
-                Box::into_raw(Box::new(handler)) as *mut c_void,
+                CALLBACKS_IVAR,
+                Box::into_raw(Box::new(callbacks)) as *mut c_void,
             );
 
-            button.setTarget_(target);
-            button.setAction_(sel!(clicked:));
+            let menu = build_status_item_menu(target)?;
+            item.setMenu_(*menu);
 
             Ok(Self {
                 item,
+                _menu: menu,
                 _target: StrongPtr::new(target),
             })
         }
@@ -89,14 +111,79 @@ fn status_item_target_class() -> &'static Class {
         let mut decl = ClassDecl::new("TvoiceStatusItemTarget", class!(NSObject))
             .context("failed to declare TvoiceStatusItemTarget")
             .unwrap();
-        decl.add_ivar::<*mut c_void>(CALLBACK_IVAR);
+        decl.add_ivar::<*mut c_void>(CALLBACKS_IVAR);
         decl.add_method(
-            sel!(clicked:),
-            status_item_clicked as extern "C" fn(&Object, Sel, id),
+            sel!(openApp:),
+            open_app_selected as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(showAbout:),
+            show_about_selected as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(quitApp:),
+            quit_app_selected as extern "C" fn(&Object, Sel, id),
         );
         decl.add_method(sel!(dealloc), dealloc_target as extern "C" fn(&Object, Sel));
         decl.register()
     })
+}
+
+fn build_status_item_menu(target: id) -> Result<StrongPtr> {
+    unsafe {
+        let menu = NSMenu::alloc(nil).initWithTitle_(NSString::alloc(nil).init_str("tvoice"));
+        if menu == nil {
+            bail!("failed to create the status item menu");
+        }
+
+        menu.setAutoenablesItems(NO);
+        add_menu_item(
+            menu,
+            "Open App",
+            sel!(openApp:),
+            target,
+            NSImageNameRevealFreestandingTemplate,
+        )?;
+        add_menu_item(menu, "About", sel!(showAbout:), target, NSImageNameInfo)?;
+        add_menu_item(
+            menu,
+            "Quit",
+            sel!(quitApp:),
+            target,
+            NSImageNameStopProgressFreestandingTemplate,
+        )?;
+
+        Ok(StrongPtr::new(menu))
+    }
+}
+
+fn add_menu_item(menu: id, title: &str, action: Sel, target: id, image_name: id) -> Result<()> {
+    unsafe {
+        let item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(
+            NSString::alloc(nil).init_str(title),
+            action,
+            NSString::alloc(nil).init_str(""),
+        );
+        if item == nil {
+            bail!("failed to create a status menu item");
+        }
+
+        NSMenuItem::setTarget_(item, target);
+        let image = NSImage::imageNamed_(nil, image_name);
+        if image != nil {
+            let _: () = msg_send![image, setTemplate: YES];
+            let _: () = msg_send![image, setSize: NSSize::new(14.0, 14.0)];
+            let _: () = msg_send![item, setImage: image];
+        }
+        menu.addItem_(item);
+        Ok(())
+    }
+}
+
+fn quit_application() {
+    unsafe {
+        let _: () = msg_send![cocoa::appkit::NSApp(), terminate: nil];
+    }
 }
 
 fn status_item_image() -> id {
@@ -124,23 +211,35 @@ fn status_item_image() -> id {
     }
 }
 
-extern "C" fn status_item_clicked(this: &Object, _: Sel, _: id) {
+extern "C" fn open_app_selected(this: &Object, _: Sel, _: id) {
+    with_callbacks(this, |callbacks| (callbacks.open_app)());
+}
+
+extern "C" fn show_about_selected(this: &Object, _: Sel, _: id) {
+    with_callbacks(this, |callbacks| (callbacks.about)());
+}
+
+extern "C" fn quit_app_selected(this: &Object, _: Sel, _: id) {
+    with_callbacks(this, |callbacks| (callbacks.quit)());
+}
+
+fn with_callbacks(this: &Object, action: impl FnOnce(&mut MenuCallbacks)) {
     unsafe {
-        let raw_handler = *this.get_ivar::<*mut c_void>(CALLBACK_IVAR);
-        if raw_handler.is_null() {
+        let raw_callbacks = *this.get_ivar::<*mut c_void>(CALLBACKS_IVAR);
+        if raw_callbacks.is_null() {
             return;
         }
 
-        let handler = &mut *(raw_handler as *mut ClickHandler);
-        handler();
+        let callbacks = &mut *(raw_callbacks as *mut MenuCallbacks);
+        action(callbacks);
     }
 }
 
 extern "C" fn dealloc_target(this: &Object, _: Sel) {
     unsafe {
-        let raw_handler = *this.get_ivar::<*mut c_void>(CALLBACK_IVAR);
-        if !raw_handler.is_null() {
-            drop(Box::from_raw(raw_handler as *mut ClickHandler));
+        let raw_callbacks = *this.get_ivar::<*mut c_void>(CALLBACKS_IVAR);
+        if !raw_callbacks.is_null() {
+            drop(Box::from_raw(raw_callbacks as *mut MenuCallbacks));
         }
 
         let _: () = msg_send![super(this, class!(NSObject)), dealloc];

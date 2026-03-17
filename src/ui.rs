@@ -20,6 +20,7 @@ use uuid::Uuid;
 #[derive(Clone, Debug)]
 pub enum UiCommand {
     ShowSettings,
+    ShowAbout,
     ShowOverlay { display_uuid: Option<Uuid> },
     HideOverlay,
 }
@@ -129,6 +130,7 @@ fn display_uuid(display_id: CGDirectDisplayID) -> Option<Uuid> {
 struct UiController {
     settings: SharedSettings,
     settings_window: Option<AnyWindowHandle>,
+    about_window: Option<AnyWindowHandle>,
     overlay_window: Option<AnyWindowHandle>,
 }
 
@@ -137,6 +139,7 @@ impl UiController {
         Self {
             settings,
             settings_window: None,
+            about_window: None,
             overlay_window: None,
         }
     }
@@ -144,6 +147,7 @@ impl UiController {
     fn handle(&mut self, command: UiCommand, cx: &mut AsyncApp) -> Result<()> {
         match command {
             UiCommand::ShowSettings => self.show_settings_window(cx),
+            UiCommand::ShowAbout => self.show_about_window(cx),
             UiCommand::ShowOverlay { display_uuid } => self.show_overlay(display_uuid, cx),
             UiCommand::HideOverlay => self.hide_overlay(cx),
         }
@@ -181,6 +185,38 @@ impl UiController {
         )?;
 
         self.settings_window = Some(window.into());
+        Ok(())
+    }
+
+    fn show_about_window(&mut self, cx: &mut AsyncApp) -> Result<()> {
+        activate_menu_bar_app();
+
+        if let Some(handle) = self.about_window {
+            if handle
+                .update(cx, |_, window, _| {
+                    window.activate_window();
+                })
+                .is_ok()
+            {
+                return Ok(());
+            }
+
+            self.about_window = None;
+        }
+
+        let bounds = cx.update(|app| Bounds::centered(None, size(px(360.), px(240.)), app))?;
+        let window = cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                ..Default::default()
+            },
+            |window, cx| {
+                let view = cx.new(|_| AboutView);
+                cx.new(|cx| Root::new(view, window, cx))
+            },
+        )?;
+
+        self.about_window = Some(window.into());
         Ok(())
     }
 
@@ -502,6 +538,63 @@ impl Render for ListeningOverlay {
                             .text_sm()
                             .text_color(white())
                             .child("Listening"),
+                    ),
+            )
+    }
+}
+
+struct AboutView;
+
+impl Render for AboutView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .bg(gpui::rgb(0x0d1117))
+            .text_color(gpui::rgb(0xf8fafc))
+            .p_6()
+            .child(
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_3()
+                            .child(div().text_xl().child("tvoice"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(gpui::rgb(0x94a3b8))
+                                    .child("Menu-bar push-to-talk transcription for macOS."),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(gpui::rgb(0xcbd5e1))
+                                    .child(format!("Version {}", env!("CARGO_PKG_VERSION"))),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(gpui::rgb(0x94a3b8))
+                                    .child("Hold Control to record, then release to transcribe and paste."),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .child(
+                                Button::new("close-about")
+                                    .primary()
+                                    .label("Close")
+                                    .on_click(|_, window, _| {
+                                        window.remove_window();
+                                    }),
+                            ),
                     ),
             )
     }
