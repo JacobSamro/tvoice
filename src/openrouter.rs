@@ -12,31 +12,36 @@ use std::time::Duration;
 pub struct OpenRouterConfig {
     pub api_key: String,
     pub model: String,
+    pub prompt: String,
     pub app_title: String,
     pub http_referer: Option<String>,
 }
 
 pub struct OpenRouterClient {
     client: Client,
-    config: OpenRouterConfig,
 }
 
 impl OpenRouterClient {
-    pub fn new(config: OpenRouterConfig) -> Result<Self> {
+    pub fn new() -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(120))
             .build()
             .context("failed to construct OpenRouter client")?;
 
-        Ok(Self { client, config })
+        Ok(Self { client })
     }
 
-    pub fn transcribe_file(&self, audio_path: &Path, format: &str) -> Result<String> {
+    pub fn transcribe_file(
+        &self,
+        config: &OpenRouterConfig,
+        audio_path: &Path,
+        format: &str,
+    ) -> Result<String> {
         let audio_bytes = fs::read(audio_path)
             .with_context(|| format!("failed to read {}", audio_path.display()))?;
 
         let payload = json!({
-            "model": self.config.model,
+            "model": config.model,
             "temperature": 0,
             "messages": [
                 {
@@ -44,7 +49,7 @@ impl OpenRouterClient {
                     "content": [
                         {
                             "type": "text",
-                            "text": "Transcribe this audio verbatim. Return only the spoken words as plain text."
+                            "text": config.prompt
                         },
                         {
                             "type": "input_audio",
@@ -61,11 +66,11 @@ impl OpenRouterClient {
         let mut request = self
             .client
             .post("https://openrouter.ai/api/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .header("Authorization", format!("Bearer {}", config.api_key))
             .header("Content-Type", "application/json")
-            .header("X-Title", &self.config.app_title);
+            .header("X-Title", &config.app_title);
 
-        if let Some(http_referer) = &self.config.http_referer {
+        if let Some(http_referer) = &config.http_referer {
             request = request.header("HTTP-Referer", http_referer);
         }
 
