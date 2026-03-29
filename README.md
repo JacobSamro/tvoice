@@ -1,53 +1,69 @@
 # tvoice
 
-`tvoice` is a macOS-only Rust push-to-talk transcriber that runs from the menu bar.
+Push-to-talk transcription from your system tray. Hold Control, say what you want to type, let go, and it shows up at your cursor.
 
-Hold `Control` to record from the default microphone. Releasing `Control` stops the recording, compresses it to `m4a`, sends it to OpenRouter for transcription, and pastes the transcript into the currently focused field. While recording, a small listening indicator appears at the center of the active display.
+Rust. macOS and Windows.
 
-## Requirements
+## How it works
 
-- macOS
-- Rust toolchain
-- Permission to use:
-  - Microphone
-  - Accessibility
-  - Input Monitoring
+tvoice runs in your menu bar (macOS) or notification area (Windows). When you hold Control, it records from your default mic and a floating circle appears so you know it's listening. Release Control and the audio goes to OpenRouter for transcription. The transcript gets pasted into whatever field had focus.
+
+You stay in whatever app you were using. Talk, release, keep working.
+
+## Setup
+
+Get an [OpenRouter](https://openrouter.ai/) API key. tvoice asks for it on first launch.
+
+macOS will prompt for permissions:
+
+- Microphone, so it can record
+- Accessibility, so it can paste into other apps
+- Input Monitoring, so it can catch the Control key globally
+
+Windows only asks about the microphone.
 
 ## Configuration
 
-Copy `.env.example` values into your shell environment if you want to seed the initial settings:
+API key, model, and transcription prompt can all be changed from the tray icon. No restart needed. Settings live in your platform's standard app data directory.
 
-```bash
-export OPENROUTER_API_KEY=...
-export TVOICE_OPENROUTER_MODEL=openai/gpt-audio-mini
+Environment variables also work, which is handy for first launch:
+
+| Variable | Purpose |
+|---|---|
+| `OPENROUTER_API_KEY` | Your API key |
+| `TVOICE_OPENROUTER_MODEL` | Model for transcription (default: `openai/gpt-audio-mini`) |
+| `TVOICE_OPENROUTER_PROMPT` | Custom prompt sent with your audio |
+| `TVOICE_APP_TITLE` | App title in requests |
+| `TVOICE_HTTP_REFERER` | HTTP referer for OpenRouter |
+
+## Worth knowing
+
+The bare Control key gets swallowed while tvoice runs. Ctrl+C, Ctrl+V, other combos all work -- it only grabs a solo Control press.
+
+Audio leaves your machine. It goes through OpenRouter to whichever model you configure, so pick one you're okay with.
+
+Pasting works by writing to the clipboard and simulating Cmd+V (macOS) or Ctrl+V (Windows), which means your clipboard contents get overwritten.
+
+macOS compresses audio with `afconvert` before sending. Windows uploads the raw WAV.
+
+## Building from source
+
+Install the Rust toolchain, then:
+
 ```
-
-Optional:
-
-```bash
-export TVOICE_APP_TITLE=tvoice
-export TVOICE_HTTP_REFERER=https://your-app.example
-export TVOICE_OPENROUTER_PROMPT="Transcribe this audio verbatim. Return only the spoken words as plain text."
-```
-
-The app stores live settings in `~/Library/Application Support/tvoice/settings.json`. Use the menu-bar item to update the API key, model, and prompt without restarting.
-
-## Run
-
-```bash
 cargo run
 ```
 
-Once running:
+macOS app bundle:
 
-1. Click into a text field.
-2. Hold `Control` and speak.
-3. Release `Control`.
-4. Wait for the transcript to be pasted at the current cursor position.
+```
+zsh scripts/build_macos_app.sh
+open target/debug/tvoice.app
+```
 
-## Notes
+Release:
 
-- The app shows a `TV` status item in the macOS menu bar. Clicking it opens the settings window.
-- This build captures the plain `Control` key globally. While it is running, normal Control-key behavior is intentionally swallowed for push-to-talk.
-- Text insertion is implemented by writing the transcript to the clipboard and synthesizing `Command+V`.
-- Audio compression uses the built-in macOS `afconvert` utility.
+```
+zsh scripts/build_macos_app.sh release
+open target/release/tvoice.app
+```
